@@ -1,34 +1,35 @@
 #ifndef LEADERBOARDMANAGER_H
 #define LEADERBOARDMANAGER_H
 
+#include <QObject>
+#include <QNetworkAccessManager>
 #include <QVector>
-#include <QString>
-#include <algorithm>
 
-// Structure to hold a single score entry
 struct ScoreEntry {
-    int score;
     QString name;
-
-    // Operator for sorting (highest score first)
-    bool operator>(const ScoreEntry& other) const {
-        return score > other.score;
-    }
+    int score;
 };
 
-// Class to handle loading and saving the top scores
-class LeaderboardManager {
-public:
-    LeaderboardManager(const QString& filename = "eggcatcher_leaderboard.txt");
+class LeaderboardManager : public QObject
+{
+    Q_OBJECT
 
-    // Load top 5 scores from the file
+public:
+    explicit LeaderboardManager(QObject *parent = nullptr);
+
+    // Push score
+    void addScore(const QString &name, int score);
+
+    // Load sorted scores
     QVector<ScoreEntry> loadScores();
 
-    // Add a new score and save the updated list (maintains top 5)
-    void addScore(const QString& name, int newScore);
+private:
+    void fetchScores();
 
 private:
-    QString filename_;
+    QNetworkAccessManager net;
+    QString firebaseUrl;
+    QVector<ScoreEntry> cachedScores;
 };
 
-#endif // LEADERBOARDMANAGER_H
+#endif
