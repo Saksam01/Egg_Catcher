@@ -138,6 +138,7 @@ static void drawEggShape(QPainter &p, int cx, int cy, int box)
 // ======================================================
 // CONSTRUCTOR
 // ======================================================
+#include <QStandardPaths>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -180,6 +181,8 @@ MainWindow::MainWindow(QWidget *parent)
     timeSinceLastWind(0.0f),
     focusMode(false)
 {
+    QString dirPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    qDebug() << dirPath;
     ui->setupUi(this);
     setFocusPolicy(Qt::StrongFocus);
 
@@ -279,47 +282,85 @@ MainWindow::~MainWindow()
 // ======================================================
 // HIGH SCORE PERSISTENCE (Local)
 // ======================================================
-#include <QStandardPaths>
+#include <QUuid>
+QString MainWindow::getDeviceID()
+{
+    QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+    + "/device_id.txt";
 
-void MainWindow::loadHighScore() {
-    QString savePath = QStandardPaths::writableLocation(
-                           QStandardPaths::AppDataLocation
-                           ) + "/mygame_save.txt";
+    QFile f(path);
 
-    QFile file(savePath);
-    if (!file.exists()) return;
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    // Already exists → load
+    if (f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QString id = f.readAll().trimmed();
+        f.close();
+        if (!id.isEmpty())
+            return id;
+    }
 
-    QTextStream in(&file);
-    playerName = in.readLine();
-    highScore = in.readLine().toInt();
-    file.close();
+    // Create new
+    QString newID = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        f.write(newID.toUtf8());
+        f.close();
+    }
+
+    return newID;
 }
 
 
+void MainWindow::loadHighScore()
+{
+    QString dirPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dirPath);
 
-void MainWindow::saveHighScore() {
+    QString filePath = dirPath + "/player_info.txt";
+    QFile file(filePath);
+
+    if (!file.exists()) {
+        playerName = "Player";
+        highScore = 0;
+        return;
+    }
+
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return;
+
+    QTextStream in(&file);
+    playerName = in.readLine().trimmed();
+    highScore = in.readLine().toInt();
+    file.close();
+
+    if (playerName.isEmpty())
+        playerName = "Player";
+}
+
+
+void MainWindow::saveHighScore()
+{
     QString dirPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 
-    // QDir dir;
-    // if (!dir.exists(dirPath)) {
-    //     dir.mkpath(dirPath);
-    // }
+    QDir().mkpath(dirPath);
 
-    QString savePath = dirPath + "/mygame_save.txt";
+    QString filePath = dirPath + "/player_info.txt";
+    QFile file(filePath);
 
-    QFile file(savePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qDebug() << "FAILED TO CREATE FILE:" << savePath;
+        qDebug() << "FAILED TO CREATE FILE:" << filePath;
         return;
     }
 
     QTextStream out(&file);
+    // qDebug() << playerName << " " << highScore;
+
     out << playerName << "\n" << highScore;
     file.close();
 
-    // qDebug() << "Saved highscore to:" << savePath;
+    qDebug() << "Saved highscore to:" << filePath;
 }
+
+
 
 
 // ======================================================
@@ -371,12 +412,16 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 // ======================================================
 // GAME/MENU STATE HANDLERS
 // ======================================================
-
 void MainWindow::startGameButtonClicked() {
+    playerName = nameInput->text().trimmed().isEmpty()
+    ? "Player"
+    : nameInput->text().trimmed();
+
     showMenu = false;
     gameRunning = true;
     resetGame();
 }
+
 
 void MainWindow::showLeaderboardButtonClicked() {
 
@@ -395,14 +440,13 @@ void MainWindow::showLeaderboardButtonClicked() {
 
 void MainWindow::handleGameOver()
 {
-    int oldHigh = highScore;
     highScore = std::max(score, highScore);
 
-    if (highScore != oldHigh) {
-        saveHighScore();
-    }
-    if (score > 0) {
-        leaderboardManager.addScore(playerName, score);
+    saveHighScore();
+    if (score >= 0) {
+        QString deviceID = getDeviceID();
+        qDebug() << playerName << " " << highScore;
+        leaderboardManager.addScore(deviceID, playerName, highScore);
     }
 }
 

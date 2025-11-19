@@ -18,7 +18,7 @@ public:
     explicit LeaderboardManager(QObject *parent = nullptr);
 
     // Push score
-    void addScore(const QString &name, int score);
+    void addScore(const QString &uniqueID, const QString &name, int score);
 
     // Load sorted scores
     QVector<ScoreEntry> loadScores();

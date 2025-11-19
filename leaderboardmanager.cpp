@@ -16,16 +16,20 @@ LeaderboardManager::LeaderboardManager(QObject *parent)
 /* -------------------------------------------------------------
    ADD OR UPDATE PLAYER SCORE
 --------------------------------------------------------------*/
-void LeaderboardManager::addScore(const QString &name, int score)
+void LeaderboardManager::addScore(const QString &uniqueID,
+                                  const QString &name,
+                                  int score)
 {
-    fetchScores();
+    QString recordUrl =
+        QString("https://eggcatcher-7e326-default-rtdb.firebaseio.com/leaderboard/%1.json")
+            .arg(uniqueID);
 
-    QString existingKey;
     int oldScore = -1;
+    QString oldName;
 
-    // 1) Find if player exists
+    // ---- READ EXISTING RECORD ----
     {
-        QNetworkRequest getReq(firebaseUrl);
+        QNetworkRequest getReq(recordUrl);
         QEventLoop loop;
         QNetworkReply *rep = net.get(getReq);
 
@@ -33,56 +37,36 @@ void LeaderboardManager::addScore(const QString &name, int score)
         loop.exec();
 
         if (rep->error() == QNetworkReply::NoError) {
-            QJsonObject root =
-                QJsonDocument::fromJson(rep->readAll()).object();
+            QJsonObject obj = QJsonDocument::fromJson(rep->readAll()).object();
 
-            for (auto it = root.begin(); it != root.end(); ++it) {
-                QJsonObject obj = it.value().toObject();
-                if (obj["name"].toString() == name) {
-                    existingKey = it.key();
-                    oldScore = obj["score"].toInt();
-                    break;
-                }
-            }
+            if (obj.contains("score"))
+                oldScore = obj["score"].toInt();
+
+            if (obj.contains("name"))
+                oldName = obj["name"].toString();
         }
+
         rep->deleteLater();
     }
 
-    // 2) If exists → update only if score improved
-    if (!existingKey.isEmpty()) {
+    // ---- UPDATE RULES ----
+    bool scoreNotImproved = (score <= oldScore);
+    bool nameSame = (oldName == name);
 
-        if (score <= oldScore)
-            return;     // No update required
-
-        QString updateUrl =
-            QString("https://eggcatcher-7e326-default-rtdb.firebaseio.com/leaderboard/%1.json")
-                .arg(existingKey);
-
-        QJsonObject data;
-        data["name"] = name;
-        data["score"] = score;
-
-        QNetworkRequest req(updateUrl);
-        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-        QNetworkReply *rep = net.put(req, QJsonDocument(data).toJson());
-
-        QEventLoop loop;
-        connect(rep, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        loop.exec();
-
-        rep->deleteLater();
+    // Skip update ONLY if nothing changed
+    if (scoreNotImproved && nameSame) {
         return;
     }
 
-    // 3) If new → push new record
-    QJsonObject obj;
-    obj["name"] = name;
-    obj["score"] = score;
+    // ---- WRITE NEW RECORD ----
+    QJsonObject data;
+    data["name"] = name;
+    data["score"] = score;
 
-    QNetworkRequest req(firebaseUrl);
+    QNetworkRequest req(recordUrl);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
-    QNetworkReply *rep = net.post(req, QJsonDocument(obj).toJson());
+    QNetworkReply *rep = net.put(req, QJsonDocument(data).toJson());
 
     QEventLoop loop;
     connect(rep, &QNetworkReply::finished, &loop, &QEventLoop::quit);

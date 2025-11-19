@@ -74,7 +74,7 @@ private slots:
 private:
 
     LeaderboardManager leaderboardManager;
-    QString playerName = "Player";
+    QString playerName;
 
     // [CHANGE] UI elements for the menu/leaderboard
     QPushButton *playButton;
@@ -174,6 +174,7 @@ private:
     void loadHighScore();
     void saveHighScore();
     void handleGameOver();
+    QString getDeviceID();
 };
 
 #endif // MAINWINDOW_H
