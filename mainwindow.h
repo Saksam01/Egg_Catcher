@@ -26,6 +26,7 @@ struct Egg {
     QString type;    // "normal", "bad", "life"
     QColor color;    // visual tint
 };
+
 struct Particle {
     QPoint pos;      // integer position (grid units scaled)
     QPoint velocity; // integer velocity (scaled)
@@ -33,8 +34,6 @@ struct Particle {
     int alpha;       // 0-255
     QColor color;
 };
-
-
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -53,8 +52,7 @@ private slots:
 private:
     QVector<Particle> particles;
 
-
-    int highScore;  // <--- Add this
+    int highScore;
 
     Ui::MainWindow *ui;
     QTimer *gameTimer;
@@ -105,7 +103,6 @@ private:
     float livesPulseTimer = 0.0f;
     bool livesChanged = false;
 
-
     bool gameOver;
     bool gameRunning;
 
@@ -114,6 +111,16 @@ private:
 
     QSoundEffect soundCatch;
     QSoundEffect soundLose;
+
+    // ---- Wind system ----
+    bool windActive;
+    float windStrength;      // grid cells per second, +/- for left/right
+    float windTimer;         // remaining time for current wind event
+    float windCooldown;      // minimum time between wind events
+    float timeSinceLastWind; // time since last wind ended
+
+    // ---- Focus mode ----
+    bool focusMode;          // true when in focus mode (score-based cycles)
 
     // ---- Utility Methods ----
     void resetGame();

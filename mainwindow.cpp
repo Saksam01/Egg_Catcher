@@ -9,6 +9,8 @@
 #include <QDebug>
 #include <QPainterPath>
 #include <QKeyEvent>
+#include <QFile>
+#include <QTextStream>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -40,7 +42,13 @@ MainWindow::MainWindow(QWidget *parent)
     score(0),
     lives(3),
     flashAlpha(0.0f),
-    flashFadeSpeed(2.5f)
+    flashFadeSpeed(2.5f),
+    windActive(false),
+    windStrength(0.0f),
+    windTimer(0.0f),
+    windCooldown(8.0f),
+    timeSinceLastWind(0.0f),
+    focusMode(false)
 {
     ui->setupUi(this);
     setFocusPolicy(Qt::StrongFocus);
@@ -111,9 +119,6 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-#include <QFile>
-#include <QTextStream>
-
 void MainWindow::loadHighScore() {
     QFile file("highscore.txt");
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -133,7 +138,6 @@ void MainWindow::saveHighScore() {
         file.close();
     }
 }
-
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
@@ -190,6 +194,13 @@ void MainWindow::resetGame()
     frameClock.restart();
     gameRunning = true;
     gameTimer->start();
+
+    // Reset wind and focus mode
+    windActive = false;
+    windStrength = 0.0f;
+    windTimer = 0.0f;
+    timeSinceLastWind = 0.0f;
+    focusMode = false;
 }
 
 void MainWindow::drawStartScreen()
@@ -224,7 +235,6 @@ void MainWindow::drawGameOver()
 
 void MainWindow::gameTick()
 {
-
     if (gameOver) {
         drawGameOver();
         return;
@@ -265,11 +275,10 @@ void MainWindow::gameTick()
         fpsTimer = 0;
     }
 
-
     if (scoreAnimTimer > 0.0f) {
         scoreAnimTimer -= dt;
         float t = 1.0f - scoreAnimTimer / 0.2f;
-        scoreScale = 1.0f + 0.5f * (1.0f - t*t); // ease-out
+        scoreScale = 1.0f + 0.5f * (1.0f - t * t); // ease-out
     } else {
         scoreScale = 1.0f;
         scoreChanged = false;
@@ -279,9 +288,7 @@ void MainWindow::gameTick()
     if (livesPulseTimer > 0.0f) {
         livesPulseTimer -= dt;
     }
-
 }
-
 
 void MainWindow::updatePhysics(float dt)
 {
@@ -290,6 +297,65 @@ void MainWindow::updatePhysics(float dt)
 
     globalTime += dt;
     globalSpawnTimer += dt;
+
+    // ---------- FOCUS MODE STATE (cyclic based on score) ----------
+    // Pattern:
+    // 0–49   : normal
+    // 50–149 : focus
+    // 150–199: normal
+    // 200–299: focus
+    // 300–349: normal
+    // 350–449: focus
+    // => From 50 onward: cycles of 150 points: 100 focus, 50 normal.
+    bool newFocus = false;
+    if (score >= 50) {
+        int t = score - 50;   // 0,1,2,...
+        int m = t % 150;      // 0..149
+        if (m < 100)          // first 100 in each cycle = focus
+            newFocus = true;
+    }
+    focusMode = newFocus;
+
+    // ---------- WIND STATE UPDATE ----------
+    timeSinceLastWind += dt;
+
+    // Start a wind gust occasionally, after cooldown
+    if (!windActive && timeSinceLastWind >= windCooldown) {
+        // Very small chance per physics tick -> feels rare, not spammy
+        if (QRandomGenerator::global()->bounded(1000) < 2) {
+            windActive = true;
+            // Gust lasts between 1.2s and 2.5s
+            windTimer = QRandomGenerator::global()->bounded(1200, 2500) / 1000.0f;
+            timeSinceLastWind = 0.0f;
+
+            // Wind strength in grid cells per second
+            float minStrength = 2.0f;
+            float maxStrength = 6.0f;
+
+            // In focus mode, wind is a bit stronger but still manageable
+            if (focusMode) {
+                minStrength = 4.0f;
+                maxStrength = 10.0f;
+            }
+
+            float magnitude = QRandomGenerator::global()->bounded(
+                                  (int)(minStrength * 100),
+                                  (int)(maxStrength * 100)
+                                  ) / 100.0f;
+            int direction = (QRandomGenerator::global()->bounded(0, 2) == 0) ? -1 : 1;
+            windStrength = direction * magnitude;
+        }
+    }
+
+    // Decrease remaining wind time
+    if (windActive) {
+        windTimer -= dt;
+        if (windTimer <= 0.0f) {
+            windActive = false;
+            windStrength = 0.0f;
+        }
+    }
+
 
     // -------------------- EGG SPAWN --------------------
     if (globalSpawnTimer >= spawnInterval) {
@@ -307,7 +373,7 @@ void MainWindow::updatePhysics(float dt)
             e.yVelocity = 0.0f;
             e.state = "falling";
 
-            // ------------------ NEW TYPE SYSTEM ------------------
+            // ------------------ TYPE SYSTEM ------------------
             int r = QRandomGenerator::global()->bounded(100);
             if (r < 75) {
                 e.type = "normal";
@@ -317,7 +383,7 @@ void MainWindow::updatePhysics(float dt)
                 e.color = QColor(200, 50, 50); // red tint
             } else {
                 e.type = "life";
-                e.color = QColor(255, 105, 180); // pink/green
+                e.color = QColor(255, 105, 180); // pink/pastel
             }
 
             eggs.append(e);
@@ -339,6 +405,8 @@ void MainWindow::updatePhysics(float dt)
         basketTargetVel = 0.0f;
 
     float blend = 1.0f - qExp(-basketAccel * dt);
+    Q_UNUSED(blend); // (kept for potential future smoothing logic)
+
     basketXVelocity += (basketTargetVel - basketXVelocity) * qMin(1.0f, dt * basketAccel);
 
     // **MOVE basket position**
@@ -346,25 +414,46 @@ void MainWindow::updatePhysics(float dt)
     basket.setX(std::clamp((float)basket.x(), 0.0f, float(cols - 1)));
     prevBasketX = basket.x();
 
-    // -------------------- EGG PHYSICS --------------------
-    float baseGravity = 18.0f + score* 0.1f;
-    float maxFallSpeed = 35.0f;
+    // -------------------- EGG PHYSICS & DIFFICULTY --------------------
+    // Made gentler so game is smoother and easier early on
+    float baseGravity = 10.0f + score * 0.05f;   // lower starting gravity, slower growth
+    float maxFallSpeed = 22.0f;                  // slower terminal speed
 
-    spawnInterval = qMax(0.3f, 0.8f - score * 0.02f);
+    // Eggs spawn a bit slower and ramp more gently with score
+    spawnInterval = qMax(0.6f, 1.0f - score * 0.01f);
+    // score 0  -> 1.0s
+    // score 20 -> 0.8s
+    // score 40 -> 0.6s (clamped)
+
+    // In focus mode, increase intensity, but not insane
+    if (focusMode) {
+        baseGravity *= 1.15f;                   // slightly faster fall
+        maxFallSpeed *= 1.15f;
+        spawnInterval = qMax(0.5f, spawnInterval - 0.05f);
+    }
 
 
     QVector<Egg> survivors;
-    bool caughtAny = false, lostAny = false;
+    bool caughtAny = false;
+    bool lostLifeAny = false;
+    bool gainedLifeAny = false;
+
     for (auto &egg : eggs) {
         egg.prevY = egg.pos.y();
         float gravity = baseGravity;
         if (egg.type == "life") gravity *= 0.5f; // slower fall
-        if (egg.type == "bad") gravity *= 1.2f;  // slightly faster
+        if (egg.type == "bad")  gravity *= 1.2f; // slightly faster
 
         if (egg.state == "falling") {
             egg.yVelocity += gravity * dt;
             egg.yVelocity = qMin(egg.yVelocity, maxFallSpeed);
             egg.pos.setY(egg.pos.y() + egg.yVelocity * dt);
+
+            // Horizontal drift due to wind
+            if (windActive) {
+                egg.pos.setX(egg.pos.x() + windStrength * dt);
+                egg.pos.setX(std::clamp((float)egg.pos.x(), 0.0f, float(cols - 1)));
+            }
 
             int basketWidth = 16;
             int basketHeight = 6;
@@ -379,33 +468,70 @@ void MainWindow::updatePhysics(float dt)
             QRectF eggRect(egg.pos.x(), egg.pos.y(), 1.0f, 1.0f);
 
             if (eggRect.intersects(basketRect)) {
+                // Caught
                 egg.state = "caught";
                 egg.animTimer = 0;
+                caughtAny = true;
 
+                // ---- SCORING ----
+                int scoreDelta = 0;
+
+                if (!focusMode) {
+                    // NORMAL MODE
+                    if (egg.type == "normal" || egg.type == "life") {
+                        scoreDelta = 2;  // +2
+                    } else if (egg.type == "bad") {
+                        scoreDelta = -2; // -2
+                    }
+                } else {
+                    // FOCUS MODE
+                    if (egg.type == "normal" || egg.type == "life") {
+                        scoreDelta = 5;  // +5
+                    } else if (egg.type == "bad") {
+                        // Option C: no score change
+                        scoreDelta = 0;
+                    }
+                }
+
+                // Apply score
+                score += scoreDelta;
+
+                // ---- LIVES ----
                 if (egg.type == "bad") {
+                    // bad egg: lose 1 life in both modes
                     lives = std::max(0, lives - 1);
-                    lostAny = true;
-                    flashColor = QColor(255, 0, 0);  // pure red
+                    lostLifeAny = true;
+                    flashColor = QColor(255, 0, 0);  // red
                     flashAlpha = 0.0f;
                     flashTimer = 0.0f;
                 }
                 else if (egg.type == "life") {
+                    // life egg: +1 life (up to 5)
+                    int oldLives = lives;
                     lives = std::min(5, lives + 1);
+                    if (lives > oldLives) {
+                        gainedLifeAny = true;
+                    }
                     flashColor = QColor(0, 255, 0);  // green
                     flashAlpha = 0.0f;
                     flashTimer = 0.0f;
                 }
-                else {
-                    score++;
-                }
+                // normal egg: just score, no life change
 
-                caughtAny = true;
             }
             else if (egg.pos.y() >= rows - 1) {
+                // MISSED: splat on ground
                 egg.state = "splat";
                 egg.animTimer = 0;
-                if(egg.type != "bad")
-                    lostAny = true;
+
+                // In both modes:
+                // - Missing normal egg -> -1 life
+                // - Missing life egg   -> -1 life
+                // - Missing bad egg    -> no penalty
+                if (egg.type != "bad") {
+                    lives = std::max(0, lives - 1);
+                    lostLifeAny = true;
+                }
             }
             survivors.push_back(egg);
         }
@@ -417,7 +543,7 @@ void MainWindow::updatePhysics(float dt)
                 continue;
             survivors.push_back(egg);
         }
-        else if (egg.state == "splat" && egg.animTimer < 1) { // spawn once
+        else if (egg.state == "splat" && egg.animTimer < 1) { // spawn particles once
             int numParticles = 12;
             int scale = 1000;
             for (int i = 0; i < numParticles; ++i) {
@@ -435,15 +561,13 @@ void MainWindow::updatePhysics(float dt)
                 particles.append(p);
             }
         }
-
     }
 
     eggs = survivors;
-    if (caughtAny) score++;
-    if (lostAny) lives--;
-    if (score > highScore) highScore = score;  // <--- update high score
-    if(lives <= 0) gameOver = true;
 
+    // High score check
+    if (score > highScore) highScore = score;
+    if (lives <= 0) gameOver = true;
 
     // -------- FLASH ANIMATION UPDATE --------
     if (flashColor.isValid()) {
@@ -461,19 +585,20 @@ void MainWindow::updatePhysics(float dt)
         }
     }
 
-
+    // Score pulse when any egg was caught
     if (caughtAny && !gameOver) {
         scoreAnimTimer = 0.2f;   // duration of pulse
         scoreScale = 1.5f;       // scale factor
         scoreChanged = true;
     }
 
-    if (lostAny || std::any_of(eggs.begin(), eggs.end(), [](const Egg &e){ return e.type == "life"; })) {
+    // Lives pulse on any life change (lost or gained)
+    if ((lostLifeAny || gainedLifeAny) && !gameOver) {
         livesPulseTimer = 0.3f;
         livesChanged = true;
     }
 
-
+    // -------- PARTICLE UPDATE --------
     QVector<Particle> aliveParticles;
     int scale = 1000;
     for (auto &p : particles) {
@@ -484,7 +609,6 @@ void MainWindow::updatePhysics(float dt)
             aliveParticles.push_back(p);
     }
     particles = aliveParticles;
-
 }
 
 void MainWindow::drawEggShape(QPainter &p, const Egg &egg, float cellSize)
@@ -493,8 +617,8 @@ void MainWindow::drawEggShape(QPainter &p, const Egg &egg, float cellSize)
 
     QPointF center((egg.pos.x() + 0.5f) * cellSize, (egg.pos.y() + 0.5f) * cellSize);
 
-    float baseW = cellSize *2.5f* 1.5f; // width scaling
-    float baseH = cellSize *2.5f* 2.0f; // height scaling
+    float baseW = cellSize * 2.5f * 1.5f; // width scaling
+    float baseH = cellSize * 2.5f * 2.0f; // height scaling
     float w = baseW * egg.scale;
     float h = baseH * egg.scale;
 
@@ -510,14 +634,13 @@ void MainWindow::drawEggShape(QPainter &p, const Egg &egg, float cellSize)
         p.fillRect(center.x() + gx, center.y() + gy, step, step, fillColor);
     };
 
-
-    for (int yi = -h/2; yi <= h/2; yi += step)
+    for (int yi = -h / 2; yi <= h / 2; yi += step)
     {
-        float yf = float(yi) / (h/2);
+        float yf = float(yi) / (h / 2);
 
         float modifier = (yf < 0) ? (1.0f - 0.3f * yf * yf) : (1.0f + 0.1f * yf);
 
-        int xSpan = int((w/2) * sqrt(1 - yf * yf) * modifier);
+        int xSpan = int((w / 2) * sqrt(1 - yf * yf) * modifier);
 
         for (int xi = -xSpan; xi <= xSpan; xi += step)
         {
@@ -526,11 +649,11 @@ void MainWindow::drawEggShape(QPainter &p, const Egg &egg, float cellSize)
     }
 
     p.setBrush(outlineColor);
-    for (int yi = -h/2; yi <= h/2; yi += step)
+    for (int yi = -h / 2; yi <= h / 2; yi += step)
     {
-        float yf = float(yi) / (h/2);
+        float yf = float(yi) / (h / 2);
         float modifier = (yf < 0) ? (1.0f - 0.3f * yf * yf) : (1.0f + 0.1f * yf);
-        int xSpan = int((w/2) * sqrt(1 - yf * yf) * modifier);
+        int xSpan = int((w / 2) * sqrt(1 - yf * yf) * modifier);
 
         // left & right edges
         p.fillRect(center.x() - xSpan, center.y() + yi, step, step, outlineColor);
@@ -548,14 +671,23 @@ void MainWindow::drawEggShape(QPainter &p, const Egg &egg, float cellSize)
     }
 }
 
-
-
 void MainWindow::drawGame(float alpha)
 {
-
     QPixmap framePix = background;
+
+    // In focus mode, darken the world
+    if (focusMode) {
+        framePix.fill(Qt::black);
+    }
+
     QPainter painter(&framePix);
     painter.setRenderHint(QPainter::Antialiasing, true);
+
+    // Slight screen shake when wind is active
+    //if (windActive) {
+    //  painter.translate(QRandomGenerator::global()->bounded(-2, 3),
+    //                    QRandomGenerator::global()->bounded(-2, 3));
+    //}
 
     float basketRenderX = prevBasketX + (basket.x() - prevBasketX) * alpha;
     float basketRenderY = basket.y();
@@ -565,6 +697,7 @@ void MainWindow::drawGame(float alpha)
 
     QColor basketFill(205, 133, 63);
     QColor basketOutline(120, 60, 20);
+
     // -------- FLASH RENDERING --------
     if (flashColor.isValid() && flashAlpha > 0.0f) {
         QColor overlay = flashColor;
@@ -626,6 +759,9 @@ void MainWindow::drawGame(float alpha)
     // Score with pulse
     painter.setFont(QFont("Comic Sans MS", 24, QFont::Bold));
     QColor scoreColor(255, 215, 0); // gold
+    if (focusMode) {
+        scoreColor = QColor(0, 255, 255); // cyan in focus mode
+    }
     painter.setPen(scoreColor);
 
     painter.save();
@@ -635,12 +771,20 @@ void MainWindow::drawGame(float alpha)
     painter.drawText(QPointF(0, 0), QString("Score: %1").arg(score));
     painter.restore();
 
-
+    // High score
     QFont highFont("Arial", 18, QFont::Bold);
     painter.setFont(highFont);
     QColor highColor(200, 200, 255); // soft blue
     painter.setPen(highColor);
     painter.drawText(30, 75, QString("High Score: %1").arg(highScore));
+
+    // Focus mode banner
+    if (focusMode) {
+        painter.setFont(QFont("Arial", 18, QFont::Bold));
+        painter.setPen(QColor(0, 255, 255));
+        painter.drawText(framePix.rect(), Qt::AlignTop | Qt::AlignHCenter,
+                         "FOCUS MODE  x5 SCORE");
+    }
 
     // Lives Display (hearts with pulse)
     int heartSize = 24;
@@ -650,22 +794,23 @@ void MainWindow::drawGame(float alpha)
         int y = 20;
 
         QPainterPath heartPath;
-        heartPath.moveTo(x + heartSize/2.0, y + heartSize/5.0);
-        heartPath.cubicTo(x + heartSize/2.0, y, x, y, x, y + heartSize/3.0);
-        heartPath.cubicTo(x, y + heartSize*0.8, x + heartSize/2.0, y + heartSize, x + heartSize/2.0, y + heartSize*0.9);
-        heartPath.cubicTo(x + heartSize/2.0, y + heartSize, x + heartSize, y + heartSize*0.8, x + heartSize, y + heartSize/3.0);
-        heartPath.cubicTo(x + heartSize, y, x + heartSize/2.0, y, x + heartSize/2.0, y + heartSize/5.0);
+        heartPath.moveTo(x + heartSize / 2.0, y + heartSize / 5.0);
+        heartPath.cubicTo(x + heartSize / 2.0, y, x, y, x, y + heartSize / 3.0);
+        heartPath.cubicTo(x, y + heartSize * 0.8, x + heartSize / 2.0, y + heartSize, x + heartSize / 2.0, y + heartSize * 0.9);
+        heartPath.cubicTo(x + heartSize / 2.0, y + heartSize, x + heartSize, y + heartSize * 0.8, x + heartSize, y + heartSize / 3.0);
+        heartPath.cubicTo(x + heartSize, y, x + heartSize / 2.0, y, x + heartSize / 2.0, y + heartSize / 5.0);
 
         painter.save();
-        painter.translate(x + heartSize/2.0, y + heartSize/2.0);
+        painter.translate(x + heartSize / 2.0, y + heartSize / 2.0);
         painter.scale(pulseScale, pulseScale);
-        painter.translate(-(x + heartSize/2.0), -(y + heartSize/2.0));
+        painter.translate(-(x + heartSize / 2.0), -(y + heartSize / 2.0));
         painter.setBrush(Qt::red);
         painter.setPen(Qt::NoPen);
         painter.drawPath(heartPath);
         painter.restore();
     }
 
+    // Draw particles
     painter.setPen(Qt::NoPen);
     for (auto &p : particles) {
         QColor c = p.color;
@@ -675,8 +820,6 @@ void MainWindow::drawGame(float alpha)
         int size = grid_box / 3;
         painter.drawEllipse(QPointF(p.pos.x() / 1000.0, p.pos.y() / 1000.0) * grid_box, size, size);
     }
-
-
 
     painter.end();
     ui->frame->setPixmap(framePix);
