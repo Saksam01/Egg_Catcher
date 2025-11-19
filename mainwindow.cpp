@@ -749,6 +749,7 @@ void MainWindow::updatePhysics(float dt)
 
     QVector<Egg> survivors;
     bool caughtAny = false;
+    bool lostAny = false;
     bool lostLifeAny = false;
     bool gainedLifeAny = false;
 
