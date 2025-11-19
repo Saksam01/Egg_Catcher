@@ -39,6 +39,22 @@ struct Particle {
     QColor color;
 };
 
+struct WindParticle {
+    QPointF pos;
+    QPointF vel;
+    float lifetime;     // current life
+    float maxLife;      // total life
+    float alpha;        // fade
+};
+
+struct WindStreak {
+    QPointF pos;
+    float lifetime;
+    float maxLife;
+    float alpha;
+};
+
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -68,6 +84,9 @@ private:
     QPushButton *backToMenuButton;
 
     QVector<Particle> particles;
+    QVector<WindParticle> windParticles;
+    QVector<WindStreak> windStreaks;
+
 
     int highScore = 0;
 
