@@ -206,23 +206,16 @@ MainWindow::MainWindow(QWidget *parent)
     }
     ui->frame->setPixmap(background);
 
-    // Game defaults
     score = 0;
     lives = 3;
     basket = QPointF(cols / 2.0f, rows - 3.0f);
     prevBasketX = basket.x();
 
-    // Sounds
     soundCatch.setSource(QUrl::fromLocalFile("C:/Projects/EggCatcher/sfx/catch.wav"));
     soundCatch.setVolume(0.8f);
     soundLose.setSource(QUrl::fromLocalFile("C:/Projects/EggCatcher/sfx/lose.wav"));
     soundLose.setVolume(0.9f);
 
-    // In mainwindow.cpp, near the top of the MainWindow constructor
-    qDebug() << "Leaderboard file path:" << QDir::tempPath() + "/eggcatcher_leaderboard.txt";
-
-
-    // Drop columns
     dropColumns.clear();
     int mid = cols / 2;
     dropColumns = {mid - 25, mid - 5, mid + 5, mid + 25};
@@ -274,6 +267,8 @@ MainWindow::MainWindow(QWidget *parent)
         showMenu = true;
     });
 
+
+    nameInput->setText(playerName);
 }
 
 MainWindow::~MainWindow()
@@ -284,26 +279,48 @@ MainWindow::~MainWindow()
 // ======================================================
 // HIGH SCORE PERSISTENCE (Local)
 // ======================================================
+#include <QStandardPaths>
 
 void MainWindow::loadHighScore() {
-    QFile file("highscore.txt");
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&file);
-        int savedScore = 0;
-        in >> savedScore;
-        highScore = savedScore;
-        file.close();
-    }
+    QString savePath = QStandardPaths::writableLocation(
+                           QStandardPaths::AppDataLocation
+                           ) + "/mygame_save.txt";
+
+    QFile file(savePath);
+    if (!file.exists()) return;
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+
+    QTextStream in(&file);
+    playerName = in.readLine();
+    highScore = in.readLine().toInt();
+    file.close();
 }
 
+
+
 void MainWindow::saveHighScore() {
-    QFile file("highscore.txt");
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&file);
-        out << highScore;
-        file.close();
+    QString dirPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+
+    // QDir dir;
+    // if (!dir.exists(dirPath)) {
+    //     dir.mkpath(dirPath);
+    // }
+
+    QString savePath = dirPath + "/mygame_save.txt";
+
+    QFile file(savePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << "FAILED TO CREATE FILE:" << savePath;
+        return;
     }
+
+    QTextStream out(&file);
+    out << playerName << "\n" << highScore;
+    file.close();
+
+    // qDebug() << "Saved highscore to:" << savePath;
 }
+
 
 // ======================================================
 // INPUT HANDLING
@@ -362,19 +379,28 @@ void MainWindow::startGameButtonClicked() {
 }
 
 void MainWindow::showLeaderboardButtonClicked() {
+
     showMenu = false;
+    nameInput->hide();
+    playButton->hide();
+    leaderboardButton->hide();
     showLeaderboard = true;
+    loadingLeaderboard = true;
+
+    QTimer::singleShot(10, this, [this]() {
+        leaderboardManager.loadScores();
+        loadingLeaderboard = false;
+    });
 }
 
 void MainWindow::handleGameOver()
 {
-    // Update local high score for the HUD
-    if (score > highScore) {
-        highScore = score;
+    int oldHigh = highScore;
+    highScore = std::max(score, highScore);
+
+    if (highScore != oldHigh) {
         saveHighScore();
     }
-
-    // Submit score to the leaderboard manager
     if (score > 0) {
         leaderboardManager.addScore(playerName, score);
     }
@@ -482,6 +508,48 @@ void MainWindow::drawLeaderboard()
     QPainter p(&pix);
     p.setRenderHint(QPainter::Antialiasing, true);
 
+    /* --------------------------------------------------------
+       IF LOADING → SHOW SPINNER AND RETURN
+    --------------------------------------------------------*/
+    if (loadingLeaderboard) {
+
+        // dim overlay
+        p.fillRect(pix.rect(), QColor(0, 0, 0, 150));
+
+        // spinner graphics
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(QPen(Qt::yellow, 6, Qt::SolidLine, Qt::RoundCap));
+
+        int cx = pix.width() / 2;
+        int cy = pix.height() / 2;
+        int r  = 40;
+
+        // draw rotating arc
+        p.drawArc(
+            cx - r, cy - r,
+            r * 2, r * 2,
+            loaderAngle * 16,
+            120 * 16                   // size of arc
+            );
+
+        loaderAngle += 10;   // rotation speed
+        if (loaderAngle >= 360) loaderAngle = 0;
+
+        // text: "Loading Leaderboard..."
+        p.setPen(Qt::white);
+        p.setFont(QFont("Arial", 20, QFont::Bold));
+        p.drawText(0, cy + 80, pix.width(), 40,
+                   Qt::AlignCenter, "Loading Leaderboard...");
+
+        p.end();
+        ui->frame->setPixmap(pix);
+        return;     // DO NOT draw scores until loading finished
+    }
+
+    /* --------------------------------------------------------
+       LOADING FINISHED → DRAW FULL LEADERBOARD
+    --------------------------------------------------------*/
+
     QVector<ScoreEntry> topScores = leaderboardManager.loadScores();
 
     p.setPen(Qt::cyan);
@@ -493,7 +561,7 @@ void MainWindow::drawLeaderboard()
     p.setFont(QFont("Arial", 20, QFont::Bold));
     p.setPen(Qt::white);
 
-    // Draw Headers
+    // headers
     p.drawText(150, yPos, "RANK");
     p.drawText(250, yPos, "SCORE");
     p.drawText(400, yPos, "NAME");
@@ -502,6 +570,7 @@ void MainWindow::drawLeaderboard()
     for (int i = 0; i < 5; ++i) {
         p.setPen(i == 0 ? Qt::yellow : Qt::white);
         p.setFont(QFont("Arial", 18));
+
         QString rank = QString::number(i + 1);
         QString scoreText = "---";
         QString nameText = "Empty";
@@ -517,11 +586,9 @@ void MainWindow::drawLeaderboard()
         yPos += 40;
     }
 
-
     p.end();
     ui->frame->setPixmap(pix);
 
-    // Hide/Show UI elements
     nameInput->hide();
     playButton->hide();
     leaderboardButton->hide();
@@ -883,10 +950,6 @@ void MainWindow::updatePhysics(float dt)
     if (lostAny) lives--;
     if (score > highScore) highScore = score;
     if(lives <= 0) gameOver = true;
-
-    // High score check
-    if (score > highScore) highScore = score;
-    if (lives <= 0) gameOver = true;
 
     // -------- FLASH ANIMATION UPDATE --------
     if (flashColor.isValid()) {

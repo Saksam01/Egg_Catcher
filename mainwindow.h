@@ -58,7 +58,7 @@ private slots:
 private:
 
     LeaderboardManager leaderboardManager;
-    QString playerName = "Player"; // [CHANGE] Default player name
+    QString playerName = "Player";
 
     // [CHANGE] UI elements for the menu/leaderboard
     QPushButton *playButton;
@@ -69,7 +69,7 @@ private:
 
     QVector<Particle> particles;
 
-    int highScore;
+    int highScore = 0;
 
     Ui::MainWindow *ui;
     QTimer *gameTimer;
@@ -87,6 +87,8 @@ private:
     float spawnInterval;
     float lastEdgeSpawnTime;
     float edgeSpawnCooldown;
+    bool loadingLeaderboard = false;
+    float loaderAngle = 0.0f;
 
     int currentColumnIndex;
 
