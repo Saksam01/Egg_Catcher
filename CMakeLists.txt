@@ -18,7 +18,9 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(PROJECT_SOURCES
     main.cpp
     mainwindow.cpp
+    leaderboardmanager.cpp
     mainwindow.h
+    leaderboardmanager.h
     mainwindow.ui
     my_label.cpp
     my_label.h
